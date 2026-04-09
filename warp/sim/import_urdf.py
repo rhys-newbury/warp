@@ -469,6 +469,10 @@ def parse_urdf(
         builder.add_joint_fixed(-1, root, parent_xform=xform, name="fixed_base")
 
     # add joints, in topological order starting from root body
+    # add joints, in topological order starting from root body
+    joint_name_to_index = {}
+    pending_mimics = []
+
     for joint in sorted_joints:
         parent = link_index[joint["parent"]]
         child = link_index[joint["child"]]
@@ -496,8 +500,10 @@ def parse_urdf(
             "armature": armature,
         }
 
+        joint_id = None
+
         if joint["type"] == "revolute" or joint["type"] == "continuous":
-            builder.add_joint_revolute(
+            joint_id = builder.add_joint_revolute(
                 axis=joint["axis"],
                 target_ke=stiffness,
                 target_kd=joint_damping,
@@ -509,7 +515,7 @@ def parse_urdf(
                 **joint_params,
             )
         elif joint["type"] == "prismatic":
-            builder.add_joint_prismatic(
+            joint_id = builder.add_joint_prismatic(
                 axis=joint["axis"],
                 target_ke=stiffness,
                 target_kd=joint_damping,
@@ -521,9 +527,9 @@ def parse_urdf(
                 **joint_params,
             )
         elif joint["type"] == "fixed":
-            builder.add_joint_fixed(**joint_params)
+            joint_id = builder.add_joint_fixed(**joint_params)
         elif joint["type"] == "floating":
-            builder.add_joint_free(**joint_params)
+            joint_id = builder.add_joint_free(**joint_params)
         elif joint["type"] == "planar":
             # find plane vectors perpendicular to axis
             axis = np.array(joint["axis"])
@@ -538,7 +544,7 @@ def parse_urdf(
             v = np.cross(axis, u)
             v /= np.linalg.norm(v)
 
-            builder.add_joint_d6(
+            joint_id = builder.add_joint_d6(
                 linear_axes=[
                     wp.sim.JointAxis(
                         u,
@@ -565,6 +571,27 @@ def parse_urdf(
             )
         else:
             raise Exception("Unsupported joint type: " + joint["type"])
+
+        joint_name_to_index[joint["name"]] = joint_id
+
+        if "mimic_joint" in joint:
+            pending_mimics.append(
+                (
+                    joint_id,
+                    joint["mimic_joint"],
+                    joint.get("mimic_multiplier", 1.0),
+                    joint.get("mimic_offset", 0.0),
+                )
+            )
+
+    for joint_id, mimic_name, mimic_multiplier, mimic_offset in pending_mimics:
+        mimic_id = joint_name_to_index.get(mimic_name)
+        if mimic_id is None:
+            raise ValueError(f"Mimic joint '{mimic_name}' not found for joint '{builder.joint_name[joint_id]}'")
+
+        builder.joint_mimic[joint_id] = mimic_id
+        builder.joint_mimic_multiplier[joint_id] = mimic_multiplier
+        builder.joint_mimic_offset[joint_id] = mimic_offset
 
     for i in range(start_shape_count, end_shape_count):
         for j in visual_shapes:

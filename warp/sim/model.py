@@ -837,6 +837,11 @@ class Model:
         self.rigid_contact_point_id = None
         self.rigid_contact_point_limit = None
 
+        self.joint_mimic = []             # source joint index, or -1
+        self.joint_mimic_multiplier = []  # float
+        self.joint_mimic_offset = []      # float
+
+        
         # toggles ground contact for all shapes
         self.ground = True
         self.ground_plane = None
@@ -1661,6 +1666,9 @@ class ModelBuilder:
         armature: float = 1e-2,
         collision_filter_parent: bool = True,
         enabled: bool = True,
+        mimic: Optional[int] = None,
+        mimic_multiplier: float = 1.0,
+        mimic_offset: float = 0.0,
     ) -> int:
         """
         Generic method to add any type of joint to this ModelBuilder.
@@ -1715,6 +1723,10 @@ class ModelBuilder:
         self.joint_linear_compliance.append(linear_compliance)
         self.joint_angular_compliance.append(angular_compliance)
         self.joint_enabled.append(enabled)
+
+        self.joint_mimic.append(-1 if mimic is None else mimic)
+        self.joint_mimic_multiplier.append(mimic_multiplier)
+        self.joint_mimic_offset.append(mimic_offset)
 
         def add_axis_dim(dim: JointAxis):
             self.joint_axis.append(dim.axis)
@@ -1808,6 +1820,9 @@ class ModelBuilder:
         name: str = None,
         collision_filter_parent: bool = True,
         enabled: bool = True,
+        mimic: Optional[int] = None,
+        mimic_multiplier: float = 1.0,
+        mimic_offset: float = 0.0,
     ) -> int:
         """Adds a revolute (hinge) joint to the model. It has one degree of freedom.
 
@@ -1875,8 +1890,10 @@ class ModelBuilder:
             name=name,
             collision_filter_parent=collision_filter_parent,
             enabled=enabled,
+            mimic=mimic,
+            mimic_multiplier=mimic_multiplier,
+            mimic_offset=mimic_offset,
         )
-
     def add_joint_prismatic(
         self,
         parent: int,
