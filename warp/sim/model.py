@@ -837,11 +837,7 @@ class Model:
         self.rigid_contact_point_id = None
         self.rigid_contact_point_limit = None
 
-        self.joint_mimic = []             # source joint index, or -1
-        self.joint_mimic_multiplier = []  # float
-        self.joint_mimic_offset = []      # float
 
-        
         # toggles ground contact for all shapes
         self.ground = True
         self.ground_plane = None
@@ -1190,6 +1186,11 @@ class ModelBuilder:
         # list of np.array
         self.particle_coloring = []
 
+        self.joint_mimic = []             # source joint index, or -1
+        self.joint_mimic_multiplier = []  # float
+        self.joint_mimic_offset = []      # float
+
+        
         # shapes (each shape has an entry in these arrays)
         # transform from shape to body
         self.shape_transform = []
