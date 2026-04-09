@@ -794,6 +794,9 @@ class Model:
         self.articulation_start = None
         self.joint_name = None
 
+        self.joint_mimic = None
+        self.joint_mimic_multiplier = None
+        self.joint_mimic_offset = None
         # todo: per-joint values?
         self.joint_attach_ke = 1.0e3
         self.joint_attach_kd = 1.0e2
@@ -1482,6 +1485,12 @@ class ModelBuilder:
 
             self.joint_axis_start.extend([a + self.joint_axis_total_count for a in builder.joint_axis_start])
 
+            self.joint_mimic.extend(
+                [j + self.joint_count if j != -1 else -1 for j in builder.joint_mimic]
+            )
+            self.joint_mimic_multiplier.extend(builder.joint_mimic_multiplier)
+            self.joint_mimic_offset.extend(builder.joint_mimic_offset)
+            
         for i in range(builder.body_count):
             if xform is not None:
                 self.body_q.append(xform * builder.body_q[i])
@@ -4619,6 +4628,11 @@ class ModelBuilder:
             # hash-grid for particle interactions
             m.particle_grid = wp.HashGrid(128, 128, 128)
 
+
+            m.joint_mimic = wp.array(self.joint_mimic, dtype=wp.int32)
+            m.joint_mimic_multiplier = wp.array(self.joint_mimic_multiplier, dtype=wp.float32)
+            m.joint_mimic_offset = wp.array(self.joint_mimic_offset, dtype=wp.float32)
+            
             # ---------------------
             # collision geometry
 
