@@ -541,7 +541,7 @@ def eval_articulation_fk(
 
 
 # updates state body information based on joint coordinates
-def eval_fk(model, joint_q, joint_qd, mask, state):
+def eval_fk(model, joint_q, joint_qd, mask, state,joint_mimic,joint_mimic_multiplier,joint_mimic_offset):
     """
     Evaluates the model's forward kinematics given the joint coordinates and updates the state's body information (:attr:`State.body_q` and :attr:`State.body_qd`).
 
@@ -560,9 +560,9 @@ def eval_fk(model, joint_q, joint_qd, mask, state):
             model.joint_type,
             model.joint_q_start,
             model.joint_qd_start,
-            model.joint_mimic,
-            model.joint_mimic_multiplier,
-            model.joint_mimic_offset,
+            joint_mimic,
+            joint_mimic_multiplier,
+            joint_mimic_offset,
         ],
         outputs=[joint_q, joint_qd],
         device=model.device,
@@ -586,9 +586,9 @@ def eval_fk(model, joint_q, joint_qd, mask, state):
             model.joint_axis_start,
             model.joint_axis_dim,
             model.body_com,
-            model.joint_mimic,
-            model.joint_mimic_multiplier,
-            model.joint_mimic_offset,
+            joint_mimic,
+            joint_mimic_multiplier,
+            joint_mimic_offset,
         ],
         outputs=[
             state.body_q,
