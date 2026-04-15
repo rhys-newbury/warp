@@ -552,6 +552,21 @@ def eval_fk(model, joint_q, joint_qd, mask, state):
         mask (array): The mask to use to enable / disable FK for an articulation. If None then treat all as enabled, shape [articulation_count], int/bool
         state (State): The state to update.
     """
+
+    wp.launch(
+        kernel=apply_mimic_joint_coordinates,
+        dim=model.joint_count,
+        inputs=[
+            model.joint_type,
+            model.joint_q_start,
+            model.joint_qd_start,
+            model.joint_mimic,
+            model.joint_mimic_multiplier,
+            model.joint_mimic_offset,
+        ],
+        outputs=[joint_q, joint_qd],
+        device=model.device,
+    )    
     wp.launch(
         kernel=eval_articulation_fk,
         dim=model.articulation_count,
