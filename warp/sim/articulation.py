@@ -189,9 +189,6 @@ def eval_single_articulation_fk(
     joint_axis_start: wp.array(dtype=int),
     joint_axis_dim: wp.array(dtype=int, ndim=2),
     body_com: wp.array(dtype=wp.vec3),
-    joint_mimic: wp.array(dtype=int),
-    joint_mimic_multiplier: wp.array(dtype=float),
-    joint_mimic_offset: wp.array(dtype=float),
     # outputs
     body_q: wp.array(dtype=wp.transform),
     body_qd: wp.array(dtype=wp.spatial_vector),
@@ -241,19 +238,8 @@ def eval_single_articulation_fk(
         elif type == wp.sim.JOINT_REVOLUTE:
             axis = joint_axis[axis_start]
 
-            mimic = joint_mimic[i]
-            if mimic >= 0:
-                src_q_start = joint_q_start[mimic]
-                src_qd_start = joint_qd_start[mimic]
-
-                m = joint_mimic_multiplier[i]
-                b = joint_mimic_offset[i]
-
-                q = m * joint_q[src_q_start] + b
-                qd = m * joint_qd[src_qd_start]
-            else:
-                q = joint_q[q_start]
-                qd = joint_qd[qd_start]
+            q = joint_q[q_start]
+            qd = joint_qd[qd_start]
 
             X_j = wp.transform(wp.vec3(), wp.quat_from_axis_angle(axis, q))
             v_j = wp.spatial_vector(axis * qd, wp.vec3())
@@ -385,7 +371,51 @@ def eval_single_articulation_fk(
 
 
 @wp.kernel
-def apply_mimic_joint_coordinates(
+def masked_copy_array(
+    src: wp.array(dtype=float),
+    mask: wp.array(dtype=float),
+    dst: wp.array(dtype=float),
+):
+    tid = wp.tid()
+    dst[tid] = src[tid] * mask[tid]
+
+
+@wp.kernel
+def apply_mimic_joint_coordinates_fk(
+    joint_type: wp.array(dtype=int),
+    joint_q_start: wp.array(dtype=int),
+    joint_qd_start: wp.array(dtype=int),
+    joint_mimic: wp.array(dtype=int),
+    joint_mimic_multiplier: wp.array(dtype=float),
+    joint_mimic_offset: wp.array(dtype=float),
+    joint_q_in: wp.array(dtype=float),
+    joint_qd_in: wp.array(dtype=float),
+    joint_q_out: wp.array(dtype=float),
+    joint_qd_out: wp.array(dtype=float),
+):
+    tid = wp.tid()
+
+    if joint_type[tid] != wp.sim.JOINT_REVOLUTE:
+        return
+
+    mimic = joint_mimic[tid]
+    if mimic < 0:
+        return
+
+    q_start = joint_q_start[tid]
+    qd_start = joint_qd_start[tid]
+    src_q_start = joint_q_start[mimic]
+    src_qd_start = joint_qd_start[mimic]
+
+    m = joint_mimic_multiplier[tid]
+    b = joint_mimic_offset[tid]
+
+    joint_q_out[q_start] = m * joint_q_in[src_q_start] + b
+    joint_qd_out[qd_start] = m * joint_qd_in[src_qd_start]
+
+
+@wp.kernel
+def apply_mimic_joint_coordinates_inplace(
     joint_type: wp.array(dtype=int),
     joint_q_start: wp.array(dtype=int),
     joint_qd_start: wp.array(dtype=int),
@@ -414,8 +444,6 @@ def apply_mimic_joint_coordinates(
 
     joint_q[q_start] = m * joint_q[src_q_start] + b
     joint_qd[qd_start] = m * joint_qd[src_qd_start]
-
-
 # implementation where mask is an integer array
 @wp.kernel
 def eval_articulation_fk(
@@ -436,9 +464,6 @@ def eval_articulation_fk(
     joint_axis_start: wp.array(dtype=int),
     joint_axis_dim: wp.array(dtype=int, ndim=2),
     body_com: wp.array(dtype=wp.vec3),
-    joint_mimic: wp.array(dtype=int),
-    joint_mimic_multiplier: wp.array(dtype=float),
-    joint_mimic_offset: wp.array(dtype=float),
     # outputs
     body_q: wp.array(dtype=wp.transform),
     body_qd: wp.array(dtype=wp.spatial_vector),
@@ -469,9 +494,6 @@ def eval_articulation_fk(
         joint_axis_start,
         joint_axis_dim,
         body_com,
-        joint_mimic,
-        joint_mimic_multiplier,
-        joint_mimic_offset,
         # outputs
         body_q,
         body_qd,
@@ -498,9 +520,6 @@ def eval_articulation_fk(
     joint_axis_start: wp.array(dtype=int),
     joint_axis_dim: wp.array(dtype=int, ndim=2),
     body_com: wp.array(dtype=wp.vec3),
-    joint_mimic: wp.array(dtype=int),
-    joint_mimic_multiplier: wp.array(dtype=float),
-    joint_mimic_offset: wp.array(dtype=float),
     # outputs
     body_q: wp.array(dtype=wp.transform),
     body_qd: wp.array(dtype=wp.spatial_vector),
@@ -531,9 +550,6 @@ def eval_articulation_fk(
         joint_axis_start,
         joint_axis_dim,
         body_com,
-        joint_mimic,
-        joint_mimic_multiplier,
-        joint_mimic_offset,
         # outputs
         body_q,
         body_qd,
@@ -541,20 +557,77 @@ def eval_articulation_fk(
 
 
 # updates state body information based on joint coordinates
-def eval_fk(model, joint_q, joint_qd, mask, state,joint_mimic,joint_mimic_multiplier,joint_mimic_offset):
-    """
-    Evaluates the model's forward kinematics given the joint coordinates and updates the state's body information (:attr:`State.body_q` and :attr:`State.body_qd`).
 
-    Args:
-        model (Model): The model to evaluate.
-        joint_q (array): Generalized joint position coordinates, shape [joint_coord_count], float
-        joint_qd (array): Generalized joint velocity coordinates, shape [joint_dof_count], float
-        mask (array): The mask to use to enable / disable FK for an articulation. If None then treat all as enabled, shape [articulation_count], int/bool
-        state (State): The state to update.
+
+def build_fk_coordinate_masks(model, joint_mimic, device=None):
     """
+    Build per-coordinate masks for FK scratch buffers.
+
+    Coordinates belonging to mimic target joints get mask 0 so they are never
+    copied from the raw optimization vector into the FK scratch vector.
+    All other coordinates get mask 1.
+    """
+    if device is None:
+        device = model.device
+
+    joint_q_mask = wp.ones_like(model.joint_q, requires_grad=False)
+    joint_qd_mask = wp.ones_like(model.joint_qd, requires_grad=False)
+
+    joint_type_np = model.joint_type.numpy()
+    joint_q_start_np = model.joint_q_start.numpy()
+    joint_qd_start_np = model.joint_qd_start.numpy()
+
+    if hasattr(joint_mimic, "numpy"):
+        joint_mimic_np = joint_mimic.numpy()
+    else:
+        joint_mimic_np = joint_mimic
+
+    q_mask_np = joint_q_mask.numpy()
+    qd_mask_np = joint_qd_mask.numpy()
+
+    for j, src in enumerate(joint_mimic_np):
+        if src < 0:
+            continue
+        if joint_type_np[j] != wp.sim.JOINT_REVOLUTE:
+            continue
+
+        q_mask_np[joint_q_start_np[j]] = 0.0
+        qd_mask_np[joint_qd_start_np[j]] = 0.0
+
+    joint_q_mask = wp.array(q_mask_np, dtype=float, device=device)
+    joint_qd_mask = wp.array(qd_mask_np, dtype=float, device=device)
+
+    return joint_q_mask, joint_qd_mask
+
+
+def eval_fk(model, joint_q, joint_qd, mask, state,
+            joint_mimic, joint_mimic_multiplier, joint_mimic_offset,
+            joint_q_mask=None, joint_qd_mask=None):
+
+    # Fresh scratch buffers, not clones
+    joint_q_fk = wp.empty_like(joint_q, requires_grad=True)
+    joint_qd_fk = wp.empty_like(joint_qd, requires_grad=True)
+
+    # Copy only non-mimic coordinates into scratch.
+    wp.launch(
+        kernel=masked_copy_array,
+        dim=joint_q.shape[0],
+        inputs=[joint_q, joint_q_mask],
+        outputs=[joint_q_fk],
+        device=model.device,
+    )
 
     wp.launch(
-        kernel=apply_mimic_joint_coordinates,
+        kernel=masked_copy_array,
+        dim=joint_qd.shape[0],
+        inputs=[joint_qd, joint_qd_mask],
+        outputs=[joint_qd_fk],
+        device=model.device,
+    )
+
+    # Overwrite mimic coordinates in scratch from source coordinates only.
+    wp.launch(
+        kernel=apply_mimic_joint_coordinates_fk,
         dim=model.joint_count,
         inputs=[
             model.joint_type,
@@ -563,18 +636,21 @@ def eval_fk(model, joint_q, joint_qd, mask, state,joint_mimic,joint_mimic_multip
             joint_mimic,
             joint_mimic_multiplier,
             joint_mimic_offset,
+            joint_q,
+            joint_qd,
         ],
-        outputs=[joint_q, joint_qd],
+        outputs=[joint_q_fk, joint_qd_fk],
         device=model.device,
-    )    
+    )
+
     wp.launch(
         kernel=eval_articulation_fk,
         dim=model.articulation_count,
         inputs=[
             model.articulation_start,
             mask,
-            joint_q,
-            joint_qd,
+            joint_q_fk,
+            joint_qd_fk,
             model.joint_q_start,
             model.joint_qd_start,
             model.joint_type,
@@ -586,17 +662,10 @@ def eval_fk(model, joint_q, joint_qd, mask, state,joint_mimic,joint_mimic_multip
             model.joint_axis_start,
             model.joint_axis_dim,
             model.body_com,
-            joint_mimic,
-            joint_mimic_multiplier,
-            joint_mimic_offset,
         ],
-        outputs=[
-            state.body_q,
-            state.body_qd,
-        ],
+        outputs=[state.body_q, state.body_qd],
         device=model.device,
     )
-
 
 @wp.func
 def reconstruct_angular_q_qd(q_pc: wp.quat, w_err: wp.vec3, X_wp: wp.transform, axis: wp.vec3):
@@ -636,9 +705,6 @@ def eval_articulation_ik(
     joint_axis_dim: wp.array(dtype=int, ndim=2),
     joint_q_start: wp.array(dtype=int),
     joint_qd_start: wp.array(dtype=int),
-    joint_mimic: wp.array(dtype=int),
-    joint_mimic_multiplier: wp.array(dtype=float),
-    joint_mimic_offset: wp.array(dtype=float),
     joint_q: wp.array(dtype=float),
     joint_qd: wp.array(dtype=float),
 ):
@@ -866,16 +932,13 @@ def eval_ik(model, state, joint_q, joint_qd):
             model.joint_axis_dim,
             model.joint_q_start,
             model.joint_qd_start,
-            model.joint_mimic,
-            model.joint_mimic_multiplier,
-            model.joint_mimic_offset,
         ],
         outputs=[joint_q, joint_qd],
         device=model.device,
     )
 
     wp.launch(
-        kernel=apply_mimic_joint_coordinates,
+        kernel=apply_mimic_joint_coordinates_inplace,
         dim=model.joint_count,
         inputs=[
             model.joint_type,
